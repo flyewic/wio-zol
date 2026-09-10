@@ -288,6 +288,48 @@ pub const Window = union {
         }
     }
 
+    pub fn setDecorations(self: *Window, decorations: bool) void {
+        switch (active) {
+            .x11 => self.x11.setDecorations(decorations),
+            .wayland => self.wayland.setDecorations(decorations),
+        }
+    }
+
+    pub fn beginMove(self: *Window) void {
+        switch (active) {
+            .x11 => self.x11.beginMove(),
+            .wayland => self.wayland.beginMove(),
+        }
+    }
+
+    pub fn beginResize(self: *Window, edge: wio.ResizeEdge) void {
+        switch (active) {
+            .x11 => self.x11.beginResize(edge),
+            .wayland => self.wayland.beginResize(edge),
+        }
+    }
+
+    pub fn minimize(self: *Window) void {
+        switch (active) {
+            .x11 => self.x11.minimize(),
+            .wayland => self.wayland.minimize(),
+        }
+    }
+
+    pub fn toggleMaximize(self: *Window) void {
+        switch (active) {
+            .x11 => self.x11.toggleMaximize(),
+            .wayland => self.wayland.toggleMaximize(),
+        }
+    }
+
+    pub fn closeWindow(self: *Window) void {
+        switch (active) {
+            .x11 => self.x11.closeWindow(),
+            .wayland => self.wayland.closeWindow(),
+        }
+    }
+
     pub fn setPosition(self: *Window, position: wio.RelativePosition) void {
         switch (active) {
             .x11 => self.x11.setPosition(position),

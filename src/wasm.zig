@@ -133,6 +133,32 @@ pub const Window = struct {
 
     pub fn setTitle(_: *Window, _: []const u8) void {}
 
+    pub fn setDecorations(self: *Window, decorations: bool) void {
+        _ = self;
+        _ = decorations;
+    }
+
+    pub fn beginMove(self: *Window) void {
+        _ = self;
+    }
+
+    pub fn beginResize(self: *Window, edge: wio.ResizeEdge) void {
+        _ = self;
+        _ = edge;
+    }
+
+    pub fn minimize(self: *Window) void {
+        _ = self;
+    }
+
+    pub fn toggleMaximize(self: *Window) void {
+        _ = self;
+    }
+
+    pub fn closeWindow(self: *Window) void {
+        _ = self;
+    }
+
     pub fn setMode(self: *Window, mode: wio.WindowMode) void {
         js.setFullscreen(self.id, mode == .fullscreen);
     }

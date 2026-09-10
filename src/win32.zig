@@ -263,6 +263,7 @@ pub const Window = struct {
     draw_available_ns: u32 = 0,
     draw_available_thread: std.Thread = undefined,
     tracking: bool = false,
+    borderless: bool = false,
     rect: w.RECT = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 },
     surrogate: u16 = 0,
     left_shift: bool = false,
@@ -449,6 +450,51 @@ pub const Window = struct {
         const title_w = std.unicode.utf8ToUtf16LeAllocZ(internal.allocator, title) catch return;
         defer internal.allocator.free(title_w);
         _ = w.SetWindowTextW(self.window, title_w);
+    }
+
+    pub fn setDecorations(self: *Window, decorations: bool) void {
+        self.borderless = !decorations;
+        // Keep WS_THICKFRAME (resize) + min/max/sysmenu; drop the caption so the
+        // app can draw its own title bar. WM_NCCALCSIZE removes the non-client
+        // area, WM_NCHITTEST routes the caption strip back to the client.
+        const style: u32 = if (decorations)
+            w.WS_OVERLAPPEDWINDOW
+        else
+            w.WS_OVERLAPPEDWINDOW & ~w.WS_CAPTION;
+        _ = w.SetWindowLongPtrW(self.window, w.GWL_STYLE, style);
+        _ = w.SetWindowPos(self.window, null, 0, 0, 0, 0, w.SWP_NOMOVE | w.SWP_NOSIZE | w.SWP_NOZORDER | w.SWP_FRAMECHANGED);
+    }
+
+    pub fn beginMove(self: *Window) void {
+        _ = w.ReleaseCapture();
+        _ = w.SendMessageW(self.window, w.WM_NCLBUTTONDOWN, @intCast(w.HTCAPTION), 0);
+    }
+
+    pub fn beginResize(self: *Window, edge: wio.ResizeEdge) void {
+        const hit: w.WPARAM = @intCast(switch (edge) {
+            .none, .top_left => w.HTTOPLEFT,
+            .top => w.HTTOP,
+            .top_right => w.HTTOPRIGHT,
+            .right => w.HTRIGHT,
+            .bottom_right => w.HTBOTTOMRIGHT,
+            .bottom => w.HTBOTTOM,
+            .bottom_left => w.HTBOTTOMLEFT,
+            .left => w.HTLEFT,
+        });
+        _ = w.ReleaseCapture();
+        _ = w.SendMessageW(self.window, w.WM_NCLBUTTONDOWN, hit, 0);
+    }
+
+    pub fn minimize(self: *Window) void {
+        _ = w.ShowWindow(self.window, w.SW_MINIMIZE);
+    }
+
+    pub fn toggleMaximize(self: *Window) void {
+        _ = w.ShowWindow(self.window, if (w.IsZoomed(self.window) != 0) w.SW_RESTORE else w.SW_MAXIMIZE);
+    }
+
+    pub fn closeWindow(self: *Window) void {
+        _ = w.PostMessageW(self.window, w.WM_CLOSE, 0, 0);
     }
 
     pub fn setMode(self: *Window, mode: wio.WindowMode) void {
@@ -1589,6 +1635,19 @@ fn windowProc(window: w.HWND, msg: u32, wParam: w.WPARAM, lParam: w.LPARAM) call
             } else {
                 return w.DefWindowProcW(window, msg, wParam, lParam);
             }
+        },
+        w.WM_NCCALCSIZE => {
+            // Borderless: make the client area cover the whole window so no OS
+            // caption/border is drawn (the app paints its own title bar).
+            if (self.borderless and wParam != 0) return 0;
+            return w.DefWindowProcW(window, msg, wParam, lParam);
+        },
+        w.WM_NCHITTEST => {
+            const result = w.DefWindowProcW(window, msg, wParam, lParam);
+            // The caption strip is app-drawn; route it to the client so its
+            // widgets receive clicks. Edges still resolve to HT* for resizing.
+            if (self.borderless and result == @as(w.LRESULT, @intCast(w.HTCAPTION))) return w.HTCLIENT;
+            return result;
         },
         w.WM_CLOSE => {
             internal.eventFn(self.event_fn_data, .close);

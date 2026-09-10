@@ -183,6 +183,40 @@ pub const Window = struct {
         self.backend.setMode(mode);
     }
 
+    /// Hide or show the window's decorations. When `false`, the window is
+    /// borderless and the application is responsible for drawing its own
+    /// title bar and window controls.
+    pub fn setDecorations(self: *Window, decorations: bool) void {
+        self.backend.setDecorations(decorations);
+    }
+
+    /// Begin an interactive move (drag) of the window. Uses the most recent
+    /// pointer or keyboard input serial; call in response to a press on the
+    /// application-drawn title bar.
+    pub fn beginMove(self: *Window) void {
+        self.backend.beginMove();
+    }
+
+    /// Begin an interactive resize of the window from `edge`. Uses the most
+    /// recent pointer input serial.
+    pub fn beginResize(self: *Window, edge: ResizeEdge) void {
+        self.backend.beginResize(edge);
+    }
+
+    pub fn minimize(self: *Window) void {
+        self.backend.minimize();
+    }
+
+    /// Toggle between maximized and normal.
+    pub fn toggleMaximize(self: *Window) void {
+        self.backend.toggleMaximize();
+    }
+
+    /// Ask the windowing system to close the window (delivers a `.close` event).
+    pub fn closeWindow(self: *Window) void {
+        self.backend.closeWindow();
+    }
+
     pub fn setPosition(self: *Window, position: RelativePosition) void {
         self.backend.setPosition(position);
     }
@@ -644,6 +678,19 @@ pub const WindowMode = enum {
     normal,
     maximized,
     fullscreen,
+};
+
+/// Edge/corner from which an interactive resize is initiated.
+pub const ResizeEdge = enum {
+    none,
+    top,
+    bottom,
+    left,
+    top_left,
+    bottom_left,
+    right,
+    top_right,
+    bottom_right,
 };
 
 pub const Modifiers = struct {

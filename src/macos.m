@@ -45,6 +45,7 @@ static void warpCursor(NSWindow *window) {
 
 @interface WioView : NSView <NSTextInputClient>
 - (BOOL)relativeMouse;
+- (NSEvent *)lastMouseDownEvent;
 @end
 
 @implementation WioApplicationDelegate
@@ -170,6 +171,7 @@ static void warpCursor(NSWindow *window) {
     NSString *marked;
     NSTrackingArea *area;
     NSCursor *cursor;
+    NSEvent *lastMouseDown;
     uint16_t textX, textY;
     BOOL textInput;
     BOOL relativeMouse;
@@ -225,6 +227,10 @@ static void warpCursor(NSWindow *window) {
 
 - (BOOL)relativeMouse {
     return relativeMouse;
+}
+
+- (NSEvent *)lastMouseDownEvent {
+    return lastMouseDown;
 }
 
 - (void)insertText:(id)string replacementRange:(NSRange)replacementRange {
@@ -334,10 +340,12 @@ static void warpCursor(NSWindow *window) {
 }
 
 - (void)mouseDown:(NSEvent *)event {
+    lastMouseDown = event;
     wioButtonPress(zig, 0);
 }
 
 - (void)mouseUp:(NSEvent *)event {
+    lastMouseDown = nil;
     wioButtonRelease(zig, 0);
 }
 
@@ -542,6 +550,54 @@ void wioSetTitle(NSWindow *window, const char *ptr, size_t len) {
 void wioSetMode(NSWindow *window, uint8_t mode) {
     if (!!([window styleMask] & NSWindowStyleMaskFullScreen) != (mode == 2)) [window toggleFullScreen:nil];
     if (mode != 2 && mode != [window isZoomed]) [window performZoom:nil];
+}
+
+void wioSetDecorations(NSWindow *window, bool decorations) {
+    // Keep Titled|Resizable so native resize/fullscreen still work; just make
+    // the title bar transparent and hide its buttons so the app can draw over
+    // the full-size content view.
+    NSWindowStyleMask mask = [window styleMask];
+    if (decorations) {
+        [window setStyleMask:mask & ~NSWindowStyleMaskFullSizeContentView];
+        [window setTitlebarAppearsTransparent:NO];
+        [window setTitleVisibility:NSWindowTitleVisible];
+        [[window standardWindowButton:NSWindowCloseButton] setHidden:NO];
+        [[window standardWindowButton:NSWindowMiniaturizeButton] setHidden:NO];
+        [[window standardWindowButton:NSWindowZoomButton] setHidden:NO];
+    } else {
+        [window setStyleMask:mask | NSWindowStyleMaskFullSizeContentView];
+        [window setTitlebarAppearsTransparent:YES];
+        [window setTitleVisibility:NSWindowTitleHidden];
+        [[window standardWindowButton:NSWindowCloseButton] setHidden:YES];
+        [[window standardWindowButton:NSWindowMiniaturizeButton] setHidden:YES];
+        [[window standardWindowButton:NSWindowZoomButton] setHidden:YES];
+    }
+}
+
+void wioWindowMove(NSWindow *window) {
+    NSEvent *event = [(WioView *)[window contentView] lastMouseDownEvent];
+    if (event != nil) {
+        [window performWindowDragWithEvent:event];
+    }
+}
+
+void wioWindowResize(NSWindow *window, uint8_t edge) {
+    // Borderless macOS keeps NSWindowStyleMaskResizable, so edge resizing is
+    // handled natively by the window server.
+    (void)window;
+    (void)edge;
+}
+
+void wioMinimize(NSWindow *window) {
+    [window miniaturize:nil];
+}
+
+void wioToggleMaximize(NSWindow *window) {
+    [window zoom:nil];
+}
+
+void wioCloseWindow(NSWindow *window) {
+    [window performClose:nil];
 }
 
 void wioSetPosition(NSWindow *window, int16_t x, int16_t y) {

@@ -185,6 +185,32 @@ pub const Window = struct {
         _ = title;
     }
 
+    pub fn setDecorations(self: *Window, decorations: bool) void {
+        _ = self;
+        _ = decorations;
+    }
+
+    pub fn beginMove(self: *Window) void {
+        _ = self;
+    }
+
+    pub fn beginResize(self: *Window, edge: wio.ResizeEdge) void {
+        _ = self;
+        _ = edge;
+    }
+
+    pub fn minimize(self: *Window) void {
+        _ = self;
+    }
+
+    pub fn toggleMaximize(self: *Window) void {
+        _ = self;
+    }
+
+    pub fn closeWindow(self: *Window) void {
+        _ = self;
+    }
+
     pub fn setMode(_: *Window, _: wio.WindowMode) void {}
 
     pub fn setPosition(_: *Window, _: wio.RelativePosition) void {}
