@@ -365,6 +365,12 @@ pub const Window = struct {
         self.setTitle(options.title);
         self.setMode(options.mode);
 
+        if (options.transparent) {
+            // Let the compositor blend the surface's alpha (client-side rounded
+            // corners / shadow). libdecor may have set an opaque region.
+            h.wl_surface_set_opaque_region(surface, null);
+        }
+
         if (options.app_id) |app_id| {
             const id = try internal.allocator.dupeSentinel(u8, app_id, 0);
             defer internal.allocator.free(id);

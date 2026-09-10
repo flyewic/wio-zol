@@ -123,6 +123,10 @@ pub const CreateWindowOptions = struct {
     /// Only functional on Windows and X11.
     parent: usize = 0,
 
+    /// Request a surface whose alpha channel is composited by the window system
+    /// (client-side rounded corners / shadows). No-op on backends that cannot.
+    transparent: bool = false,
+
     gl_options: ?GlOptions = null,
 };
 
