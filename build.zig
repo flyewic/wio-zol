@@ -64,6 +64,8 @@ pub fn build(b: *std.Build) !void {
 
             module.linkSystemLibrary("user32", .{});
             module.linkSystemLibrary("shell32", .{});
+            // DWM: rounded window corners for borderless windows on Win11.
+            module.linkSystemLibrary("dwmapi", .{});
             if (enable_drop or enable_audio) {
                 module.linkSystemLibrary("ole32", .{});
             }

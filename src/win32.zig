@@ -463,6 +463,12 @@ pub const Window = struct {
             w.WS_OVERLAPPEDWINDOW & ~w.WS_CAPTION;
         _ = w.SetWindowLongPtrW(self.window, w.GWL_STYLE, style);
         _ = w.SetWindowPos(self.window, null, 0, 0, 0, 0, w.SWP_NOMOVE | w.SWP_NOSIZE | w.SWP_NOZORDER | w.SWP_FRAMECHANGED);
+        if (!decorations) {
+            // Windows 11: let DWM round the window corners. Harmlessly rejected
+            // (E_INVALIDARG) on Windows 10.
+            var pref: u32 = w.DWMWCP_ROUND;
+            _ = w.DwmSetWindowAttribute(self.window, w.DWMWA_WINDOW_CORNER_PREFERENCE, @ptrCast(&pref), @sizeOf(u32));
+        }
     }
 
     pub fn beginMove(self: *Window) void {
