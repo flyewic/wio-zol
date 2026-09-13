@@ -40,6 +40,7 @@ var imports: extern struct {
     XPeekEvent: *const fn (?*h.Display, [*c]h.XEvent) callconv(.c) c_int,
     XGetWindowProperty: *const fn (?*h.Display, h.Window, h.Atom, c_long, c_long, c_int, h.Atom, [*c]h.Atom, [*c]c_int, [*c]c_ulong, [*c]c_ulong, [*c][*c]u8) callconv(.c) c_int,
     Xutf8LookupString: *const fn (h.XIC, [*c]h.XKeyPressedEvent, [*c]u8, c_int, [*c]h.KeySym, [*c]c_int) callconv(.c) c_int,
+    XkbKeycodeToKeysym: *const fn (?*h.Display, h.KeyCode, c_uint, c_uint) callconv(.c) h.KeySym,
     XSendEvent: *const fn (?*h.Display, h.Window, c_int, c_long, [*c]h.XEvent) callconv(.c) c_int,
     XSetICValues: *const fn (h.XIC, ...) callconv(.c) [*c]u8,
     XConfigureWindow: *const fn (?*h.Display, h.Window, c_uint, [*c]h.XWindowChanges) callconv(.c) c_int,
@@ -1337,6 +1338,22 @@ fn handle(event: *h.XEvent) void {
 
 fn handleKeyPress(window: *Window, event: *h.XEvent, repeat: bool) void {
     if (event.xkey.keycode != 0) {
+        // Layout character for shortcut resolution, independent of Ctrl/Alt
+        // (`Xutf8LookupString` below turns Ctrl chords into control characters).
+        // `XkbKeycodeToKeysym` maps the keycode through the active layout at the
+        // shift level, so Ctrl+ö resolves to `ö` rather than its US position.
+        const level: c_uint = if (event.xkey.state & h.ShiftMask != 0) 1 else 0;
+        const ks = c.XkbKeycodeToKeysym(display, @intCast(event.xkey.keycode), 0, level);
+        const layout_cp: u21 = if (ks >= 0x01000000)
+            @intCast(ks & 0x001FFFFF)
+        else if (ks <= 0xFF)
+            @intCast(ks)
+        else
+            0;
+        if (layout_cp >= ' ' and layout_cp != 0x7F) {
+            internal.eventFn(window.event_fn_data, .{ .key_text = layout_cp });
+        }
+
         const button = keycodes[event.xkey.keycode - 8];
         if (button != .mouse_left) {
             internal.eventFn(window.event_fn_data, if (repeat) .{ .button_repeat = button } else .{ .button_press = button });

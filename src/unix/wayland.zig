@@ -764,6 +764,18 @@ pub const Window = struct {
     }
 
     fn pushKeyEvent(self: *Window, key: u32, comptime event: wio.EventType) void {
+        // The key's layout character, independent of Ctrl/Alt (XKB level
+        // selection does not include them). Used for shortcut resolution with
+        // non-US layouts. The composed/text path below still gates `.char`.
+        const layout_char: ?u21 = blk: {
+            const sym = c.xkb_state_key_get_one_sym(xkb_state, key + 8);
+            const ch = std.math.cast(u21, c.xkb_keysym_to_utf32(sym)) orelse break :blk null;
+            break :blk if (ch >= ' ' and ch != 0x7F) ch else null;
+        };
+        if (layout_char) |ch| {
+            internal.eventFn(self.event_fn_data, .{ .key_text = ch });
+        }
+
         if (keyToButton(key)) |button| {
             internal.eventFn(self.event_fn_data, @unionInit(wio.Event, @tagName(event), button));
         }

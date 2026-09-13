@@ -633,6 +633,12 @@ pub const Event = union(enum) {
 
     /// Only sent when `Window.enableTextInput` has been called.
     char: u21,
+    /// The character the pressed key produces under the active keyboard layout,
+    /// resolved *without* regard to Ctrl/Alt. Unlike `.char`, this is sent for
+    /// modifier chords too, so shortcut handling can map a physical key to the
+    /// character the user sees (Ctrl+ö on a Swedish layout) instead of its US
+    /// position. Only sent when the key maps to a printable character.
+    key_text: u21,
     preview_reset: void,
     preview_char: u21,
     /// If the values are equal an I-beam should be displayed at that position,
