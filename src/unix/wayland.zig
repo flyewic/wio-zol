@@ -83,6 +83,10 @@ const egl = internal.egl(c, h);
 var libwayland_client: DynLib = undefined;
 var libxkbcommon: DynLib = undefined;
 var libdecor: DynLib = undefined;
+/// libdecor is only dlopened when a window actually needs a decorated frame
+/// (`ensureLibdecorContext`). The pure xdg-shell server-side path never does, so
+/// the SSD app never maps libdecor (or, via its plugin, the GTK stack).
+var libdecor_loaded = false;
 var libwayland_egl: DynLib = undefined;
 var libEGL: DynLib = undefined;
 
@@ -164,11 +168,9 @@ pub fn init() !bool {
     DynLib.load(&imports, &.{
         .{ .handle = &libwayland_client, .name = "libwayland-client.so.0", .prefix = "wl", .exclude = "wl_egl" },
         .{ .handle = &libxkbcommon, .name = "libxkbcommon.so.0", .prefix = "xkb" },
-        .{ .handle = &libdecor, .name = "libdecor-0.so.0", .prefix = "libdecor" },
     }) catch return false;
     errdefer libwayland_client.close();
     errdefer libxkbcommon.close();
-    errdefer libdecor.close();
 
     if (build_options.opengl) {
         DynLib.load(&imports, &.{
@@ -229,6 +231,17 @@ pub fn init() !bool {
     return true;
 }
 
+/// Open libdecor and resolve its entry points, once, on first decorated window.
+/// Keeping this out of `init` means the pure xdg-shell (server-side decoration)
+/// path never maps libdecor or its plugin.
+fn loadLibdecor() !void {
+    if (libdecor_loaded) return;
+    DynLib.load(&imports, &.{
+        .{ .handle = &libdecor, .name = "libdecor-0.so.0", .prefix = "libdecor" },
+    }) catch return error.Unexpected;
+    libdecor_loaded = true;
+}
+
 pub fn deinit() void {
     if (build_options.opengl) {
         _ = c.eglTerminate(egl.display);
@@ -242,9 +255,12 @@ pub fn deinit() void {
     preedit_string.deinit(internal.allocator);
     windows.deinit(internal.allocator);
 
-    c.libdecor_unref(libdecor_context);
-    libdecor_context = null;
-    libdecor.close();
+    if (libdecor_loaded) {
+        c.libdecor_unref(libdecor_context);
+        libdecor_context = null;
+        libdecor.close();
+        libdecor_loaded = false;
+    }
 
     c.xkb_compose_state_unref(compose_state);
     c.xkb_state_unref(xkb_state);
@@ -354,6 +370,7 @@ pub const Window = struct {
     /// libdecor-gtk and the GTK stack behind it.
     fn ensureLibdecorContext(csd: bool) !*h.libdecor {
         if (libdecor_context) |ctx| return ctx;
+        try loadLibdecor();
         if (csd) _ = setenv("LIBDECOR_PLUGIN_DIR", no_decor_plugin_dir, 1);
         const ctx = c.libdecor_new(display, &libdecor_interface) orelse return error.Unexpected;
         libdecor_context = ctx;
