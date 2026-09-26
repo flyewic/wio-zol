@@ -132,6 +132,11 @@ pub const CreateWindowOptions = struct {
     /// this also keeps libdecor's decoration plugin (and its GTK/cairo stack)
     /// unloaded, because the frame is borderless by design. `transparent`
     /// implies the same thing.
+    ///
+    /// When true and the compositor advertises `zxdg_decoration_manager_v1`,
+    /// Wayland uses a pure xdg-shell path with SERVER_SIDE decorations and skips
+    /// libdecor (and its frame) entirely. Pair with `transparent = false`: the
+    /// compositor's decorations need an opaque surface.
     decorations: bool = true,
 
     gl_options: ?GlOptions = null,
