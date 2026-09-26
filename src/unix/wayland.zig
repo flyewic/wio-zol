@@ -117,7 +117,9 @@ var keymap: ?*h.xkb_keymap = null;
 var xkb_state: ?*h.xkb_state = null;
 var compose_state: ?*h.xkb_compose_state = null;
 
-var libdecor_context: *h.libdecor = undefined;
+var libdecor_context: ?*h.libdecor = null;
+
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 
 var windows: std.AutoHashMapUnmanaged(*Window, void) = .empty;
 pub var keyboard_focus: ?*Window = null;
@@ -202,9 +204,6 @@ pub fn init() !bool {
     _ = c.wl_display_roundtrip(display);
     if (compositor == null) return error.Unexpected;
 
-    libdecor_context = c.libdecor_new(display, &libdecor_interface) orelse return error.Unexpected;
-    errdefer c.libdecor_unref(libdecor_context);
-
     if (seat) |_| {
         if (text_input_manager) |_| {
             text_input = h.zwp_text_input_manager_v3_get_text_input(text_input_manager, seat);
@@ -242,6 +241,7 @@ pub fn deinit() void {
     windows.deinit(internal.allocator);
 
     c.libdecor_unref(libdecor_context);
+    libdecor_context = null;
     libdecor.close();
 
     c.xkb_compose_state_unref(compose_state);
@@ -294,6 +294,12 @@ pub fn update() void {
     }
 }
 
+/// Plugin-free directory handed to libdecor when the app draws its own chrome.
+/// libdecor opens no plugins and falls back to "no decorations" while still
+/// providing the xdg_toplevel. Keeping libdecor-gtk unloaded avoids loading the
+/// whole GTK/cairo/pango/gdk stack (~20 MiB RSS) for a borderless window.
+const no_decor_plugin_dir = "/nonexistent-libdecor-plugins";
+
 pub const Window = struct {
     event_fn_data: ?*anyopaque,
     surface: *h.wl_surface,
@@ -320,6 +326,19 @@ pub const Window = struct {
         surface: h.EGLSurface = null,
     } else struct {} = .{},
 
+    /// Lazily create the process-wide libdecor context. The first window decides
+    /// whether system decorations are wanted (a later window reuses it). For
+    /// client-side decorations, point libdecor at a plugin-free directory so it
+    /// uses its built-in no-decorations fallback instead of dlopening
+    /// libdecor-gtk and the GTK stack behind it.
+    fn ensureLibdecorContext(csd: bool) !*h.libdecor {
+        if (libdecor_context) |ctx| return ctx;
+        if (csd) _ = setenv("LIBDECOR_PLUGIN_DIR", no_decor_plugin_dir, 1);
+        const ctx = c.libdecor_new(display, &libdecor_interface) orelse return error.Unexpected;
+        libdecor_context = ctx;
+        return ctx;
+    }
+
     pub fn create(options: wio.CreateWindowOptions) !*Window {
         const self = try internal.allocator.create(Window);
 
@@ -327,7 +346,9 @@ pub const Window = struct {
         errdefer h.wl_surface_destroy(surface);
         h.wl_surface_set_user_data(surface, self);
 
-        const frame = c.libdecor_decorate(libdecor_context, surface, &libdecor_frame_interface, self) orelse return error.Unexpected;
+        const csd = options.transparent or !options.decorations;
+        const context = try ensureLibdecorContext(csd);
+        const frame = c.libdecor_decorate(context, surface, &libdecor_frame_interface, self) orelse return error.Unexpected;
         errdefer c.libdecor_frame_unref(frame);
 
         self.* = .{

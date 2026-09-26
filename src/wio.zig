@@ -127,6 +127,13 @@ pub const CreateWindowOptions = struct {
     /// (client-side rounded corners / shadows). No-op on backends that cannot.
     transparent: bool = false,
 
+    /// When false, the application draws its own window chrome (client-side
+    /// decorations) and the backend must not add system decorations. On Wayland
+    /// this also keeps libdecor's decoration plugin (and its GTK/cairo stack)
+    /// unloaded, because the frame is borderless by design. `transparent`
+    /// implies the same thing.
+    decorations: bool = true,
+
     gl_options: ?GlOptions = null,
 };
 
