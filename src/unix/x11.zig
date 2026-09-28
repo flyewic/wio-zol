@@ -1340,10 +1340,14 @@ fn handleKeyPress(window: *Window, event: *h.XEvent, repeat: bool) void {
     if (event.xkey.keycode != 0) {
         // Layout character for shortcut resolution, independent of Ctrl/Alt
         // (`Xutf8LookupString` below turns Ctrl chords into control characters).
-        // `XkbKeycodeToKeysym` maps the keycode through the active layout at the
-        // shift level, so Ctrl+ö resolves to `ö` rather than its US position.
-        const level: c_uint = if (event.xkey.state & h.ShiftMask != 0) 1 else 0;
-        const ks = c.XkbKeycodeToKeysym(display, @intCast(event.xkey.keycode), 0, level);
+        // `XkbKeycodeToKeysym` maps the keycode through the active layout group
+        // at the shift level, so Ctrl+ö resolves to `ö` rather than its US
+        // position. The group is carried in core-state bits 13-14
+        // (`XkbGroupForCoreState`); Mod5 is the usual AltGr/Level3 modifier.
+        const group: c_uint = @intCast((event.xkey.state >> 13) & 0x3);
+        const level: c_uint = (if (event.xkey.state & h.ShiftMask != 0) @as(c_uint, 1) else 0) +
+            (if (event.xkey.state & h.Mod5Mask != 0) @as(c_uint, 2) else 0);
+        const ks = c.XkbKeycodeToKeysym(display, @intCast(event.xkey.keycode), group, level);
         const layout_cp: u21 = if (ks >= 0x01000000)
             @intCast(ks & 0x001FFFFF)
         else if (ks <= 0xFF)

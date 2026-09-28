@@ -1205,7 +1205,7 @@ fn keyboardKey(_: ?*anyopaque, _: ?*h.wl_keyboard, serial: u32, _: u32, key: u32
     }
 }
 
-fn keyboardModifiers(_: ?*anyopaque, _: ?*h.wl_keyboard, _: u32, mods_depressed: u32, mods_latched: u32, mods_locked: u32, _: u32) callconv(.c) void {
+fn keyboardModifiers(_: ?*anyopaque, _: ?*h.wl_keyboard, _: u32, mods_depressed: u32, mods_latched: u32, mods_locked: u32, group: u32) callconv(.c) void {
     if (keyboard_focus) |window| {
         const mods = mods_depressed | mods_latched | mods_locked;
         modifiers = .{
@@ -1217,7 +1217,10 @@ fn keyboardModifiers(_: ?*anyopaque, _: ?*h.wl_keyboard, _: u32, mods_depressed:
         internal.eventFn(window.event_fn_data, .{ .modifiers = modifiers });
     }
 
-    _ = c.xkb_state_update_mask(xkb_state, mods_depressed, mods_latched, mods_locked, 0, 0, 0);
+    // `group` is the active layout index; without it xkb_state stays on the
+    // first layout and `key_text` (the layout char on each key event) is wrong
+    // after the user switches keyboard layout.
+    _ = c.xkb_state_update_mask(xkb_state, mods_depressed, mods_latched, mods_locked, 0, 0, group);
 }
 
 fn keyboardRepeatInfo(_: ?*anyopaque, _: ?*h.wl_keyboard, rate: i32, delay: i32) callconv(.c) void {
