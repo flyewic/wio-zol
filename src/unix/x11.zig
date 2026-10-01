@@ -27,6 +27,8 @@ var imports: extern struct {
     XCreateWindow: *const fn (?*h.Display, h.Window, c_int, c_int, c_uint, c_uint, c_uint, c_int, c_uint, [*c]h.Visual, c_ulong, [*c]h.XSetWindowAttributes) callconv(.c) h.Window,
     XDestroyWindow: *const fn (?*h.Display, h.Window) callconv(.c) c_int,
     XMapWindow: *const fn (?*h.Display, h.Window) callconv(.c) c_int,
+    XQueryPointer: *const fn (?*h.Display, h.Window, [*c]h.Window, [*c]h.Window, [*c]c_int, [*c]c_int, [*c]c_int, [*c]c_int, [*c]c_uint) callconv(.c) c_int,
+    XIconifyWindow: *const fn (?*h.Display, h.Window, c_int) callconv(.c) c_int,
     XChangeProperty: *const fn (?*h.Display, h.Window, h.Atom, h.Atom, c_int, c_int, [*c]const u8, c_int) callconv(.c) c_int,
     XVaCreateNestedList: *const fn (c_int, ...) callconv(.c) h.XVaNestedList,
     XCreateIC: *const fn (h.XIM, ...) callconv(.c) h.XIC,
@@ -38,6 +40,7 @@ var imports: extern struct {
     XPeekEvent: *const fn (?*h.Display, [*c]h.XEvent) callconv(.c) c_int,
     XGetWindowProperty: *const fn (?*h.Display, h.Window, h.Atom, c_long, c_long, c_int, h.Atom, [*c]h.Atom, [*c]c_int, [*c]c_ulong, [*c]c_ulong, [*c][*c]u8) callconv(.c) c_int,
     Xutf8LookupString: *const fn (h.XIC, [*c]h.XKeyPressedEvent, [*c]u8, c_int, [*c]h.KeySym, [*c]c_int) callconv(.c) c_int,
+    XkbKeycodeToKeysym: *const fn (?*h.Display, h.KeyCode, c_uint, c_uint) callconv(.c) h.KeySym,
     XSendEvent: *const fn (?*h.Display, h.Window, c_int, c_long, [*c]h.XEvent) callconv(.c) c_int,
     XSetICValues: *const fn (h.XIC, ...) callconv(.c) [*c]u8,
     XConfigureWindow: *const fn (?*h.Display, h.Window, c_uint, [*c]h.XWindowChanges) callconv(.c) c_int,
@@ -94,6 +97,8 @@ var atoms: blk: {
         "_NET_WM_STATE_MAXIMIZED_HORZ",
         "_NET_WM_STATE_FULLSCREEN",
         "_NET_WM_STATE_DEMANDS_ATTENTION",
+        "_MOTIF_WM_HINTS",
+        "_NET_WM_MOVERESIZE",
         "CLIPBOARD",
         "UTF8_STRING",
         "TARGETS",
@@ -135,6 +140,17 @@ pub var globals: struct {
     xkb_mods: c_uint = 0,
     clipboard_text: []const u8 = "",
 } = .{};
+
+// EWMH _NET_WM_MOVERESIZE directions.
+const _NET_WM_MOVERESIZE_SIZE_TOPLEFT: c_long = 0;
+const _NET_WM_MOVERESIZE_SIZE_TOP: c_long = 1;
+const _NET_WM_MOVERESIZE_SIZE_TOPRIGHT: c_long = 2;
+const _NET_WM_MOVERESIZE_SIZE_RIGHT: c_long = 3;
+const _NET_WM_MOVERESIZE_SIZE_BOTTOMRIGHT: c_long = 4;
+const _NET_WM_MOVERESIZE_SIZE_BOTTOM: c_long = 5;
+const _NET_WM_MOVERESIZE_SIZE_BOTTOMLEFT: c_long = 6;
+const _NET_WM_MOVERESIZE_SIZE_LEFT: c_long = 7;
+const _NET_WM_MOVERESIZE_MOVE: c_long = 8;
 
 pub fn init() !bool {
     DynLib.load(&imports, &.{
@@ -492,6 +508,96 @@ pub const Window = struct {
 
     pub fn setTitle(self: *Window, title: []const u8) void {
         _ = c.XChangeProperty(globals.display, self.window, atoms._NET_WM_NAME, atoms.UTF8_STRING, 8, h.PropModeReplace, title.ptr, std.math.cast(c_int, title.len) orelse return);
+    }
+
+    pub fn setDecorations(self: *Window, decorations: bool) void {
+        // Motif hints: flags = MWM_HINTS_DECORATIONS (2). WMs honor this at
+        // runtime as well as at map time.
+        const MotifHints = extern struct {
+            flags: c_ulong = 2,
+            functions: c_ulong = 0,
+            decorations: c_ulong = 1,
+            input_mode: c_long = 0,
+            status: c_ulong = 0,
+        };
+        var hints = MotifHints{ .decorations = if (decorations) 1 else 0 };
+        _ = c.XChangeProperty(globals.display, self.window, atoms._MOTIF_WM_HINTS, atoms._MOTIF_WM_HINTS, 32, h.PropModeReplace, @ptrCast(&hints), 5);
+        _ = c.XFlush(globals.display);
+    }
+
+    pub fn beginMove(self: *Window) void {
+        self.sendMoveResize(_NET_WM_MOVERESIZE_MOVE);
+    }
+
+    pub fn beginResize(self: *Window, edge: wio.ResizeEdge) void {
+        self.sendMoveResize(switch (edge) {
+            .none, .top_left => _NET_WM_MOVERESIZE_SIZE_TOPLEFT,
+            .top => _NET_WM_MOVERESIZE_SIZE_TOP,
+            .top_right => _NET_WM_MOVERESIZE_SIZE_TOPRIGHT,
+            .right => _NET_WM_MOVERESIZE_SIZE_RIGHT,
+            .bottom_right => _NET_WM_MOVERESIZE_SIZE_BOTTOMRIGHT,
+            .bottom => _NET_WM_MOVERESIZE_SIZE_BOTTOM,
+            .bottom_left => _NET_WM_MOVERESIZE_SIZE_BOTTOMLEFT,
+            .left => _NET_WM_MOVERESIZE_SIZE_LEFT,
+        });
+    }
+
+    pub fn minimize(self: *Window) void {
+        _ = c.XIconifyWindow(globals.display, self.window, h.DefaultScreen(globals.display));
+        _ = c.XFlush(globals.display);
+    }
+
+    pub fn toggleMaximize(self: *Window) void {
+        var event = h.XEvent{
+            .xclient = std.mem.zeroInit(h.XClientMessageEvent, .{
+                .type = h.ClientMessage,
+                .window = self.window,
+                .message_type = atoms._NET_WM_STATE,
+                .format = 32,
+            }),
+        };
+        // action 2 == _NET_WM_STATE_TOGGLE
+        event.xclient.data.l = .{ 2, @bitCast(atoms._NET_WM_STATE_MAXIMIZED_VERT), @bitCast(atoms._NET_WM_STATE_MAXIMIZED_HORZ), 1, 0 };
+        _ = c.XSendEvent(globals.display, h.DefaultRootWindow(globals.display), h.False, h.SubstructureRedirectMask | h.SubstructureNotifyMask, &event);
+        _ = c.XFlush(globals.display);
+    }
+
+    pub fn closeWindow(self: *Window) void {
+        var event = h.XEvent{
+            .xclient = std.mem.zeroInit(h.XClientMessageEvent, .{
+                .type = h.ClientMessage,
+                .window = self.window,
+                .message_type = atoms.WM_PROTOCOLS,
+                .format = 32,
+            }),
+        };
+        event.xclient.data.l = .{ @bitCast(atoms.WM_DELETE_WINDOW), h.CurrentTime, 0, 0, 0 };
+        _ = c.XSendEvent(globals.display, self.window, h.False, h.NoEventMask, &event);
+        _ = c.XFlush(globals.display);
+    }
+
+    fn sendMoveResize(self: *Window, direction: c_long) void {
+        var root: h.Window = undefined;
+        var child: h.Window = undefined;
+        var root_x: c_int = 0;
+        var root_y: c_int = 0;
+        var win_x: c_int = 0;
+        var win_y: c_int = 0;
+        var mask: c_uint = 0;
+        _ = c.XQueryPointer(globals.display, self.window, &root, &child, &root_x, &root_y, &win_x, &win_y, &mask);
+
+        var event = h.XEvent{
+            .xclient = std.mem.zeroInit(h.XClientMessageEvent, .{
+                .type = h.ClientMessage,
+                .window = self.window,
+                .message_type = atoms._NET_WM_MOVERESIZE,
+                .format = 32,
+            }),
+        };
+        // x_root, y_root, direction, button (1 = left), source (1 = application)
+        event.xclient.data.l = .{ root_x, root_y, direction, 1, 1 };
+        _ = c.XSendEvent(globals.display, h.DefaultRootWindow(globals.display), h.False, h.SubstructureRedirectMask | h.SubstructureNotifyMask, &event);
+        _ = c.XFlush(globals.display);
     }
 
     pub fn setMode(self: *Window, mode: wio.WindowMode) void {
@@ -1257,6 +1363,26 @@ fn handle(event: *h.XEvent) void {
 
 fn handleKeyPress(window: *Window, event: *h.XEvent, repeat: bool) void {
     if (event.xkey.keycode != 0) {
+        // Layout character for shortcut resolution, independent of Ctrl/Alt
+        // (`Xutf8LookupString` below turns Ctrl chords into control characters).
+        // `XkbKeycodeToKeysym` maps the keycode through the active layout group
+        // at the shift level, so Ctrl+ö resolves to `ö` rather than its US
+        // position. The group is carried in core-state bits 13-14
+        // (`XkbGroupForCoreState`); Mod5 is the usual AltGr/Level3 modifier.
+        const group: c_uint = @intCast((event.xkey.state >> 13) & 0x3);
+        const level: c_uint = (if (event.xkey.state & h.ShiftMask != 0) @as(c_uint, 1) else 0) +
+            (if (event.xkey.state & h.Mod5Mask != 0) @as(c_uint, 2) else 0);
+        const ks = c.XkbKeycodeToKeysym(globals.display, @intCast(event.xkey.keycode), group, level);
+        const layout_cp: u21 = if (ks >= 0x01000000)
+            @intCast(ks & 0x001FFFFF)
+        else if (ks <= 0xFF)
+            @intCast(ks)
+        else
+            0;
+        if (layout_cp >= ' ' and layout_cp != 0x7F) {
+            internal.sendEvent(window.event_fn_data, .{ .key_text = layout_cp });
+        }
+
         const button = globals.keycodes[event.xkey.keycode - 8];
         if (button != .mouse_left) {
             internal.sendEvent(window.event_fn_data, if (repeat) .{ .button_repeat = button } else .{ .button_press = button });

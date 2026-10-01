@@ -27,8 +27,34 @@ var pipe: [2]std.c.fd_t = undefined;
 
 pub var libvulkan: DynLib = undefined;
 
+/// Force the one-time environment scan that `std.Io` performs lazily.
+///
+/// `std.Io` caches the process environment block at startup and reads it once,
+/// on the first stderr lock. Native toolkits a backend may load — GTK/GDK via
+/// libdecor's default plugin on Wayland, or an X11 input-method module — call
+/// `unsetenv("DESKTOP_STARTUP_ID")` during their own init; glibc then compacts
+/// `environ` in place, leaving a NULL inside the still-cached slice, and the
+/// lazy scan unwraps it (`attempt to use null value`) and panics.
+///
+/// Scanning here, before any toolkit is loaded and while the environment is
+/// still intact, makes later mutations harmless.
+fn primeEnvironmentScan(io: std.Io) void {
+    var buf: [1]u8 = undefined;
+    _ = io.lockStderr(&buf, null) catch return;
+    io.unlockStderr();
+}
+
 pub fn init(options: wio.InitOptions) !void {
     if (!build_options.system_integration and builtin.os.tag == .linux and builtin.output_mode == .Exe and builtin.link_mode == .static) @compileError("dynamic link required");
+
+    // See `primeEnvironmentScan`: cover both the caller's `Io` and the global
+    // one `std.log`/`std.debug.print` use, before any backend dlopens a toolkit.
+    primeEnvironmentScan(options.io);
+    {
+        var debug_buf: [1]u8 = undefined;
+        _ = std.debug.lockStderr(&debug_buf);
+        std.debug.unlockStderr();
+    }
 
     pollfds = .empty;
     errdefer pollfds.deinit(internal.allocator);
@@ -285,6 +311,48 @@ pub const Window = union {
         switch (active) {
             .x11 => self.x11.setMode(mode),
             .wayland => self.wayland.setMode(mode),
+        }
+    }
+
+    pub fn setDecorations(self: *Window, decorations: bool) void {
+        switch (active) {
+            .x11 => self.x11.setDecorations(decorations),
+            .wayland => self.wayland.setDecorations(decorations),
+        }
+    }
+
+    pub fn beginMove(self: *Window) void {
+        switch (active) {
+            .x11 => self.x11.beginMove(),
+            .wayland => self.wayland.beginMove(),
+        }
+    }
+
+    pub fn beginResize(self: *Window, edge: wio.ResizeEdge) void {
+        switch (active) {
+            .x11 => self.x11.beginResize(edge),
+            .wayland => self.wayland.beginResize(edge),
+        }
+    }
+
+    pub fn minimize(self: *Window) void {
+        switch (active) {
+            .x11 => self.x11.minimize(),
+            .wayland => self.wayland.minimize(),
+        }
+    }
+
+    pub fn toggleMaximize(self: *Window) void {
+        switch (active) {
+            .x11 => self.x11.toggleMaximize(),
+            .wayland => self.wayland.toggleMaximize(),
+        }
+    }
+
+    pub fn closeWindow(self: *Window) void {
+        switch (active) {
+            .x11 => self.x11.closeWindow(),
+            .wayland => self.wayland.closeWindow(),
         }
     }
 

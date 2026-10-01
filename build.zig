@@ -65,6 +65,8 @@ pub fn build(b: *std.Build) !void {
 
             module.linkSystemLibrary("user32", .{});
             module.linkSystemLibrary("shell32", .{});
+            // DWM: rounded window corners for borderless windows on Win11.
+            module.linkSystemLibrary("dwmapi", .{});
             if (enable_drop or enable_audio) {
                 module.linkSystemLibrary("ole32", .{});
             }
@@ -174,6 +176,8 @@ pub fn build(b: *std.Build) !void {
                         \\#include <relative-pointer-unstable-v1-protocol.c>
                         \\#include <pointer-gestures-unstable-v1-protocol.c>
                         \\#include <xdg-activation-v1-protocol.c>
+                        \\#include <xdg-shell-protocol.c>
+                        \\#include <xdg-decoration-v1-protocol.c>
                         \\#include <wayland-client-protocol.h>
                         \\#include <viewporter-client-protocol.h>
                         \\#include <fractional-scale-v1-client-protocol.h>
@@ -183,6 +187,8 @@ pub fn build(b: *std.Build) !void {
                         \\#include <relative-pointer-unstable-v1-client-protocol.h>
                         \\#include <pointer-gestures-unstable-v1-client-protocol.h>
                         \\#include <xdg-activation-v1-client-protocol.h>
+                        \\#include <xdg-shell-client-protocol.h>
+                        \\#include <xdg-decoration-v1-client-protocol.h>
                         \\#include <xkbcommon/xkbcommon.h>
                         \\#include <xkbcommon/xkbcommon-compose.h>
                         \\#include <libdecor.h>

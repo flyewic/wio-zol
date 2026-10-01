@@ -52,6 +52,12 @@ var imports: extern struct {
     libdecor_frame_unset_maximized: *const fn (frame: ?*h.struct_libdecor_frame) callconv(.c) void,
     libdecor_frame_set_fullscreen: *const fn (frame: ?*h.struct_libdecor_frame, output: ?*h.struct_wl_output) callconv(.c) void,
     libdecor_frame_unset_fullscreen: *const fn (frame: ?*h.struct_libdecor_frame) callconv(.c) void,
+    libdecor_frame_set_visibility: *const fn (frame: ?*h.struct_libdecor_frame, visible: bool) callconv(.c) void,
+    libdecor_frame_is_floating: *const fn (frame: ?*h.struct_libdecor_frame) callconv(.c) bool,
+    libdecor_frame_set_minimized: *const fn (frame: ?*h.struct_libdecor_frame) callconv(.c) void,
+    libdecor_frame_move: *const fn (frame: ?*h.struct_libdecor_frame, wl_seat: ?*h.struct_wl_seat, serial: u32) callconv(.c) void,
+    libdecor_frame_resize: *const fn (frame: ?*h.struct_libdecor_frame, wl_seat: ?*h.struct_wl_seat, serial: u32, edge: h.enum_libdecor_resize_edge) callconv(.c) void,
+    libdecor_frame_close: *const fn (frame: ?*h.struct_libdecor_frame) callconv(.c) void,
     wl_egl_window_create: *const fn (surface: ?*h.struct_wl_surface, width: c_int, height: c_int) callconv(.c) ?*h.struct_wl_egl_window,
     wl_egl_window_destroy: *const fn (egl_window: ?*h.struct_wl_egl_window) callconv(.c) void,
     wl_egl_window_resize: *const fn (egl_window: ?*h.struct_wl_egl_window, width: c_int, height: c_int, dx: c_int, dy: c_int) callconv(.c) void,
@@ -78,6 +84,10 @@ pub var globals: struct {
     libwayland_client: DynLib = undefined,
     libxkbcommon: DynLib = undefined,
     libdecor: DynLib = undefined,
+    /// libdecor is only dlopened when a window actually needs a decorated frame
+    /// (`ensureLibdecorContext`). The pure xdg-shell server-side path never does,
+    /// so the SSD app never maps libdecor (or, via its plugin, the GTK stack).
+    libdecor_loaded: bool = false,
     libwayland_egl: if (build_options.opengl) DynLib else void = undefined,
     libEGL: if (build_options.opengl) DynLib else void = undefined,
 
@@ -92,6 +102,8 @@ pub var globals: struct {
     viewporter: ?*h.wp_viewporter = null,
     fractional_scale_manager: ?*h.wp_fractional_scale_manager_v1 = null,
     text_input_manager: ?*h.zwp_text_input_manager_v3 = null,
+    xdg_wm_base: ?*h.xdg_wm_base = null,
+    xdg_decoration_manager: ?*h.zxdg_decoration_manager_v1 = null,
     cursor_shape_manager: ?*h.wp_cursor_shape_manager_v1 = null,
     pointer_constraints: ?*h.zwp_pointer_constraints_v1 = null,
     relative_pointer_manager: ?*h.zwp_relative_pointer_manager_v1 = null,
@@ -112,7 +124,7 @@ pub var globals: struct {
     xkb_state: ?*h.xkb_state = null,
     compose_state: ?*h.xkb_compose_state = null,
 
-    libdecor_context: *h.libdecor = undefined,
+    libdecor_context: ?*h.libdecor = null,
 
     windows: std.AutoHashMapUnmanaged(*Window, void) = .empty,
     keyboard_focus: ?*Window = null,
@@ -158,11 +170,9 @@ pub fn init() !bool {
     DynLib.load(&imports, &.{
         .{ .handle = &globals.libwayland_client, .name = "libwayland-client.so.0", .prefix = "wl", .exclude = "wl_egl" },
         .{ .handle = &globals.libxkbcommon, .name = "libxkbcommon.so.0", .prefix = "xkb" },
-        .{ .handle = &globals.libdecor, .name = "libdecor-0.so.0", .prefix = "libdecor" },
     }) catch return false;
     errdefer globals.libwayland_client.close();
     errdefer globals.libxkbcommon.close();
-    errdefer globals.libdecor.close();
 
     if (build_options.opengl) {
         DynLib.load(&imports, &.{
@@ -200,9 +210,6 @@ pub fn init() !bool {
     _ = c.wl_display_roundtrip(globals.display);
     if (globals.compositor == null) return error.Unexpected;
 
-    globals.libdecor_context = c.libdecor_new(globals.display, &libdecor_interface) orelse return error.Unexpected;
-    errdefer c.libdecor_unref(globals.libdecor_context);
-
     if (globals.seat) |_| {
         if (globals.text_input_manager) |_| {
             globals.text_input = h.zwp_text_input_manager_v3_get_text_input(globals.text_input_manager, globals.seat);
@@ -226,6 +233,19 @@ pub fn init() !bool {
     return true;
 }
 
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+
+/// Open libdecor and resolve its entry points, once, on first decorated window.
+/// Keeping this out of `init` means the pure xdg-shell (server-side decoration)
+/// path never maps libdecor or its plugin.
+fn loadLibdecor() !void {
+    if (globals.libdecor_loaded) return;
+    DynLib.load(&imports, &.{
+        .{ .handle = &globals.libdecor, .name = "libdecor-0.so.0", .prefix = "libdecor" },
+    }) catch return error.Unexpected;
+    globals.libdecor_loaded = true;
+}
+
 pub fn deinit() void {
     if (build_options.opengl) {
         _ = c.eglTerminate(egl.display);
@@ -239,8 +259,12 @@ pub fn deinit() void {
     globals.preedit_string.deinit(internal.allocator);
     globals.windows.deinit(internal.allocator);
 
-    c.libdecor_unref(globals.libdecor_context);
-    globals.libdecor.close();
+    if (globals.libdecor_loaded) {
+        c.libdecor_unref(globals.libdecor_context);
+        globals.libdecor_context = null;
+        globals.libdecor.close();
+        globals.libdecor_loaded = false;
+    }
 
     c.xkb_compose_state_unref(globals.compose_state);
     c.xkb_state_unref(globals.xkb_state);
@@ -294,10 +318,35 @@ pub fn update() void {
     }
 }
 
+/// Plugin-free directory handed to libdecor when the app draws its own chrome.
+/// libdecor opens no plugins and falls back to "no decorations" while still
+/// providing the xdg_toplevel. Keeping libdecor-gtk unloaded avoids loading the
+/// whole GTK/cairo/pango/gdk stack (~20 MiB RSS) for a borderless window.
+const no_decor_plugin_dir = "/nonexistent-libdecor-plugins";
+
+/// Pure xdg-shell window state, used instead of libdecor when the compositor
+/// offers `zxdg_decoration_manager_v1` (server-side decorations). libdecor is
+/// then never loaded for this window: xdg-shell provides the toplevel directly
+/// and the compositor draws the title bar / borders.
+const XdgState = struct {
+    xdg_surface: *h.xdg_surface,
+    toplevel: *h.xdg_toplevel,
+    decoration: ?*h.zxdg_toplevel_decoration_v1 = null,
+    /// Last compositor size to echo back on `configure`, in logical units.
+    pending_width: c_int = 0,
+    pending_height: c_int = 0,
+    last_serial: u32 = 0,
+};
+
 pub const Window = struct {
     event_fn_data: ?*anyopaque,
     surface: *h.wl_surface,
-    frame: *h.libdecor_frame,
+    /// libdecor frame; null when this window uses the pure xdg-shell path.
+    frame: ?*h.libdecor_frame,
+    xdg: ?XdgState = null,
+    /// Last known maximized state on the xdg path (libdecor answers this for
+    /// its own frame via `is_floating`).
+    xdg_maximized: bool = false,
     configured: bool = false,
     viewport: ?*h.wp_viewport = null,
     fractional_scale: ?*h.wp_fractional_scale_v1 = null,
@@ -319,6 +368,59 @@ pub const Window = struct {
         surface: h.EGLSurface = null,
     } else struct {} = .{},
 
+    /// Lazily create the process-wide libdecor context. The first window decides
+    /// whether system decorations are wanted (a later window reuses it). For
+    /// client-side decorations, point libdecor at a plugin-free directory so it
+    /// uses its built-in no-decorations fallback instead of dlopening
+    /// libdecor-gtk and the GTK stack behind it.
+    fn ensureLibdecorContext(csd: bool) !*h.libdecor {
+        if (globals.libdecor_context) |ctx| return ctx;
+        try loadLibdecor();
+        if (csd) _ = setenv("LIBDECOR_PLUGIN_DIR", no_decor_plugin_dir, 1);
+        const ctx = c.libdecor_new(globals.display, &libdecor_interface) orelse return error.Unexpected;
+        globals.libdecor_context = ctx;
+        return ctx;
+    }
+
+    /// Build the pure xdg-shell state for `surface`: xdg_surface + toplevel and,
+    /// when available, an xdg-decoration object requesting SERVER_SIDE so the
+    /// compositor draws the title bar and we skip libdecor altogether.
+    fn createXdgState(self: *Window, surface: *h.wl_surface) !XdgState {
+        const wm_base = globals.xdg_wm_base orelse return error.Unexpected;
+        const xdg_surface = h.xdg_wm_base_get_xdg_surface(wm_base, surface) orelse return error.Unexpected;
+        errdefer h.xdg_surface_destroy(xdg_surface);
+        _ = h.xdg_surface_add_listener(xdg_surface, &xdg_surface_listener, self);
+
+        const toplevel = h.xdg_surface_get_toplevel(xdg_surface) orelse return error.Unexpected;
+        errdefer h.xdg_toplevel_destroy(toplevel);
+        _ = h.xdg_toplevel_add_listener(toplevel, &xdg_toplevel_listener, self);
+
+        var decoration: ?*h.zxdg_toplevel_decoration_v1 = null;
+        if (globals.xdg_decoration_manager) |mgr| {
+            if (h.zxdg_decoration_manager_v1_get_toplevel_decoration(mgr, toplevel)) |deco| {
+                _ = h.zxdg_toplevel_decoration_v1_add_listener(deco, &xdg_decoration_listener, self);
+                h.zxdg_toplevel_decoration_v1_set_mode(deco, h.ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+                decoration = deco;
+            }
+        }
+
+        return .{ .xdg_surface = xdg_surface, .toplevel = toplevel, .decoration = decoration };
+    }
+
+    fn destroyXdgState(x: XdgState) void {
+        if (x.decoration) |deco| h.zxdg_toplevel_decoration_v1_destroy(deco);
+        h.xdg_toplevel_destroy(x.toplevel);
+        h.xdg_surface_destroy(x.xdg_surface);
+    }
+
+    /// True when this window can use the pure xdg-shell path with server-side
+    /// decorations: the app wants OS decorations and the compositor advertises
+    /// `zxdg_decoration_manager_v1`. libdecor (and its frame) is then skipped
+    /// entirely and the compositor draws the title bar and borders.
+    fn wantsXdgSsd(options: wio.CreateWindowOptions) bool {
+        return options.decorations and globals.xdg_wm_base != null and globals.xdg_decoration_manager != null;
+    }
+
     pub fn create(options: wio.CreateWindowOptions) !*Window {
         const self = try internal.allocator.create(Window);
 
@@ -326,13 +428,26 @@ pub const Window = struct {
         errdefer h.wl_surface_destroy(surface);
         h.wl_surface_set_user_data(surface, self);
 
-        const frame = c.libdecor_decorate(globals.libdecor_context, surface, &libdecor_frame_interface, self) orelse return error.Unexpected;
-        errdefer c.libdecor_frame_unref(frame);
+        const use_xdg = wantsXdgSsd(options);
+        var frame: ?*h.libdecor_frame = null;
+        var xdg: ?XdgState = null;
+        if (use_xdg) {
+            xdg = try createXdgState(self, surface);
+        } else {
+            // Client-side decorations (or no xdg-decoration manager on this
+            // compositor): libdecor with its GTK plugin suppressed.
+            const csd = options.transparent or !options.decorations;
+            const context = try ensureLibdecorContext(csd);
+            frame = c.libdecor_decorate(context, surface, &libdecor_frame_interface, self) orelse return error.Unexpected;
+        }
+        errdefer if (frame) |f| c.libdecor_frame_unref(f);
+        errdefer if (xdg) |x| destroyXdgState(x);
 
         self.* = .{
             .event_fn_data = options.event_fn_data,
             .surface = surface,
             .frame = frame,
+            .xdg = xdg,
             .size = options.size,
         };
 
@@ -356,7 +471,7 @@ pub const Window = struct {
         if (self.fractional_scale == null) internal.sendEvent(self.event_fn_data, .{ .scale = 1 });
 
         h.wl_surface_commit(surface);
-        c.libdecor_frame_map(frame);
+        if (self.frame) |f| c.libdecor_frame_map(f);
         while (!self.configured) {
             if (c.wl_display_dispatch(globals.display) == -1) return error.Unexpected;
         }
@@ -364,10 +479,20 @@ pub const Window = struct {
         self.setTitle(options.title);
         self.setMode(options.mode);
 
+        if (options.transparent) {
+            // Let the compositor blend the surface's alpha (client-side rounded
+            // corners / shadow). libdecor may have set an opaque region.
+            h.wl_surface_set_opaque_region(surface, null);
+        }
+
         if (options.app_id) |app_id| {
             const id = try internal.allocator.dupeSentinel(u8, app_id, 0);
             defer internal.allocator.free(id);
-            c.libdecor_frame_set_app_id(self.frame, id);
+            if (self.xdg) |x| {
+                h.xdg_toplevel_set_app_id(x.toplevel, id);
+            } else {
+                c.libdecor_frame_set_app_id(self.frame.?, id);
+            }
         }
 
         if (build_options.opengl) {
@@ -416,7 +541,8 @@ pub const Window = struct {
         if (self.frame_callback) |_| h.wl_callback_destroy(self.frame_callback);
         if (self.fractional_scale) |_| h.wp_fractional_scale_v1_destroy(self.fractional_scale);
         if (self.viewport) |_| h.wp_viewport_destroy(self.viewport);
-        c.libdecor_frame_unref(self.frame);
+        if (self.xdg) |x| destroyXdgState(x);
+        if (self.frame) |f| c.libdecor_frame_unref(f);
         h.wl_surface_destroy(self.surface);
         _ = c.wl_display_roundtrip(globals.display);
 
@@ -471,16 +597,82 @@ pub const Window = struct {
     pub fn setTitle(self: *Window, title: []const u8) void {
         const title_z = internal.allocator.dupeSentinel(u8, title, 0) catch return;
         defer internal.allocator.free(title_z);
-        c.libdecor_frame_set_title(self.frame, title_z);
+        if (self.xdg) |x| {
+            h.xdg_toplevel_set_title(x.toplevel, title_z);
+        } else {
+            c.libdecor_frame_set_title(self.frame.?, title_z);
+        }
     }
 
     pub fn setMode(self: *Window, mode: wio.WindowMode) void {
-        if (mode != .fullscreen) c.libdecor_frame_unset_fullscreen(self.frame);
-        switch (mode) {
-            .normal => c.libdecor_frame_unset_maximized(self.frame),
-            .maximized => c.libdecor_frame_set_maximized(self.frame),
-            .fullscreen => c.libdecor_frame_set_fullscreen(self.frame, null),
+        if (self.xdg) |x| {
+            if (mode != .fullscreen) h.xdg_toplevel_unset_fullscreen(x.toplevel);
+            switch (mode) {
+                .normal => h.xdg_toplevel_unset_maximized(x.toplevel),
+                .maximized => h.xdg_toplevel_set_maximized(x.toplevel),
+                .fullscreen => h.xdg_toplevel_set_fullscreen(x.toplevel, null),
+            }
+            return;
         }
+        const f = self.frame.?;
+        if (mode != .fullscreen) c.libdecor_frame_unset_fullscreen(f);
+        switch (mode) {
+            .normal => c.libdecor_frame_unset_maximized(f),
+            .maximized => c.libdecor_frame_set_maximized(f),
+            .fullscreen => c.libdecor_frame_set_fullscreen(f, null),
+        }
+    }
+
+    pub fn setDecorations(self: *Window, decorations: bool) void {
+        // On the xdg path the compositor owns the decoration mode (server-side);
+        // there is nothing to show/hide. Keep the libdecor behaviour only there.
+        if (self.xdg) |_| return;
+        c.libdecor_frame_set_visibility(self.frame.?, decorations);
+    }
+
+    pub fn beginMove(self: *Window) void {
+        if (self.xdg) |x| {
+            if (globals.seat) |s| h.xdg_toplevel_move(x.toplevel, s, x.last_serial);
+            return;
+        }
+        if (globals.seat) |s| c.libdecor_frame_move(self.frame.?, s, globals.last_serial);
+    }
+
+    pub fn beginResize(self: *Window, edge: wio.ResizeEdge) void {
+        if (self.xdg) |x| {
+            if (globals.seat) |s| h.xdg_toplevel_resize(x.toplevel, s, x.last_serial, @intCast(@intFromEnum(edge)));
+            return;
+        }
+        if (globals.seat) |s| c.libdecor_frame_resize(self.frame.?, s, globals.last_serial, @intCast(@intFromEnum(edge)));
+    }
+
+    pub fn minimize(self: *Window) void {
+        if (self.xdg) |x| {
+            h.xdg_toplevel_set_minimized(x.toplevel);
+            return;
+        }
+        c.libdecor_frame_set_minimized(self.frame.?);
+    }
+
+    pub fn toggleMaximize(self: *Window) void {
+        if (self.xdg) |x| {
+            if (self.xdg_maximized) h.xdg_toplevel_unset_maximized(x.toplevel) else h.xdg_toplevel_set_maximized(x.toplevel);
+            return;
+        }
+        const f = self.frame.?;
+        if (c.libdecor_frame_is_floating(f)) {
+            c.libdecor_frame_set_maximized(f);
+        } else {
+            c.libdecor_frame_unset_maximized(f);
+        }
+    }
+
+    pub fn closeWindow(self: *Window) void {
+        if (self.xdg) |_| {
+            internal.sendEvent(self.event_fn_data, .close);
+            return;
+        }
+        c.libdecor_frame_close(self.frame.?);
     }
 
     pub fn setPosition(self: *Window, position: wio.Position) void {
@@ -706,9 +898,16 @@ pub const Window = struct {
 
         if (build_options.opengl) if (self.egl.window != null) c.wl_egl_window_resize(self.egl.window, framebuffer.width, framebuffer.height, 0, 0);
 
-        const state = c.libdecor_state_new(size.width, size.height);
-        defer c.libdecor_state_free(state);
-        c.libdecor_frame_commit(self.frame, state, configuration);
+        if (self.xdg) |*x| {
+            // Ack happened in the surface configure; commit the geometry so the
+            // server draws the decoration around the content.
+            h.xdg_surface_set_window_geometry(x.xdg_surface, 0, 0, size.width, size.height);
+            h.wl_surface_commit(self.surface);
+        } else {
+            const state = c.libdecor_state_new(size.width, size.height);
+            defer c.libdecor_state_free(state);
+            c.libdecor_frame_commit(self.frame.?, state, configuration);
+        }
 
         internal.sendEvent(self.event_fn_data, .{ .size_logical = size });
         internal.sendEvent(self.event_fn_data, .{ .size_physical = framebuffer });
@@ -721,6 +920,18 @@ pub const Window = struct {
     }
 
     fn pushKeyEvent(self: *Window, key: u32, comptime event: wio.EventType) void {
+        // The key's layout character, independent of Ctrl/Alt (XKB level
+        // selection does not include them). Used for shortcut resolution with
+        // non-US layouts. The composed/text path below still gates `.char`.
+        const layout_char: ?u21 = blk: {
+            const sym = c.xkb_state_key_get_one_sym(globals.xkb_state, key + 8);
+            const ch = std.math.cast(u21, c.xkb_keysym_to_utf32(sym)) orelse break :blk null;
+            break :blk if (ch >= ' ' and ch != 0x7F) ch else null;
+        };
+        if (layout_char) |ch| {
+            internal.sendEvent(self.event_fn_data, .{ .key_text = ch });
+        }
+
         if (keyToButton(key)) |button| {
             internal.sendEvent(self.event_fn_data, @unionInit(wio.Event, @tagName(event), button));
         }
@@ -863,6 +1074,11 @@ fn registryGlobal(_: ?*anyopaque, registry: ?*h.wl_registry, name: u32, interfac
         globals.data_device_manager = @ptrCast(h.wl_registry_bind(registry, name, &h.wl_data_device_manager_interface, @min(version, 1)));
     } else if (std.mem.eql(u8, interface, "xdg_activation_v1")) {
         globals.activation = @ptrCast(h.wl_registry_bind(registry, name, &h.xdg_activation_v1_interface, @min(version, 1)));
+    } else if (std.mem.eql(u8, interface, "xdg_wm_base")) {
+        globals.xdg_wm_base = @ptrCast(h.wl_registry_bind(registry, name, &h.xdg_wm_base_interface, @min(version, 6)));
+        _ = h.xdg_wm_base_add_listener(globals.xdg_wm_base, &xdg_wm_base_listener, null);
+    } else if (std.mem.eql(u8, interface, "zxdg_decoration_manager_v1")) {
+        globals.xdg_decoration_manager = @ptrCast(h.wl_registry_bind(registry, name, &h.zxdg_decoration_manager_v1_interface, @min(version, 1)));
     }
 }
 
@@ -985,7 +1201,7 @@ fn keyboardKey(_: ?*anyopaque, _: ?*h.wl_keyboard, serial: u32, _: u32, key: u32
     }
 }
 
-fn keyboardModifiers(_: ?*anyopaque, _: ?*h.wl_keyboard, _: u32, mods_depressed: u32, mods_latched: u32, mods_locked: u32, _: u32) callconv(.c) void {
+fn keyboardModifiers(_: ?*anyopaque, _: ?*h.wl_keyboard, _: u32, mods_depressed: u32, mods_latched: u32, mods_locked: u32, group: u32) callconv(.c) void {
     if (globals.keyboard_focus) |window| {
         const mods = mods_depressed | mods_latched | mods_locked;
         globals.modifiers = .{
@@ -997,7 +1213,10 @@ fn keyboardModifiers(_: ?*anyopaque, _: ?*h.wl_keyboard, _: u32, mods_depressed:
         internal.sendEvent(window.event_fn_data, .{ .modifiers = globals.modifiers });
     }
 
-    _ = c.xkb_state_update_mask(globals.xkb_state, mods_depressed, mods_latched, mods_locked, 0, 0, 0);
+    // `group` is the active layout index; without it xkb_state stays on the
+    // first layout and `key_text` (the layout char on each key event) is wrong
+    // after the user switches keyboard layout.
+    _ = c.xkb_state_update_mask(globals.xkb_state, mods_depressed, mods_latched, mods_locked, 0, 0, group);
 }
 
 fn keyboardRepeatInfo(_: ?*anyopaque, _: ?*h.wl_keyboard, rate: i32, delay: i32) callconv(.c) void {
@@ -1457,6 +1676,72 @@ var libdecor_frame_interface: h.libdecor_frame_interface = .{
     .commit = frameCommit,
     .dismiss_popup = frameDismissPopup,
 };
+
+const xdg_wm_base_listener: h.xdg_wm_base_listener = .{
+    .ping = xdgWmBasePing,
+};
+
+fn xdgWmBasePing(_: ?*anyopaque, wm_base: ?*h.xdg_wm_base, serial: u32) callconv(.c) void {
+    h.xdg_wm_base_pong(wm_base, serial);
+}
+
+const xdg_surface_listener: h.xdg_surface_listener = .{
+    .configure = xdgSurfaceConfigure,
+};
+
+/// Each xdg object carries the `*Window` as its listener data, so the callbacks
+/// find their window directly (unlike libdecor, which passes it through).
+fn xdgSurfaceConfigure(data: ?*anyopaque, xdg_surface: ?*h.xdg_surface, serial: u32) callconv(.c) void {
+    const window: *Window = @ptrCast(@alignCast(data));
+    if (window.xdg) |*x| x.last_serial = serial;
+    h.xdg_surface_ack_configure(xdg_surface, serial);
+}
+
+const xdg_toplevel_listener: h.xdg_toplevel_listener = .{
+    .configure = xdgToplevelConfigure,
+    .close = xdgToplevelClose,
+    .configure_bounds = xdgToplevelConfigureBounds,
+    .wm_capabilities = xdgToplevelWmCapabilities,
+};
+
+fn xdgToplevelConfigure(data: ?*anyopaque, _: ?*h.xdg_toplevel, width: c_int, height: c_int, states: [*c]h.wl_array) callconv(.c) void {
+    const window: *Window = @ptrCast(@alignCast(data));
+    window.configured = true;
+
+    var mode = wio.WindowMode.normal;
+    if (states != null) {
+        const raw: [*]const u32 = @ptrCast(@alignCast(states.*.data orelse @as(?*anyopaque, null)));
+        const count = states.*.size / @sizeOf(u32);
+        for (raw[0..count]) |s| {
+            if (s == h.XDG_TOPLEVEL_STATE_MAXIMIZED) mode = .maximized;
+            if (s == h.XDG_TOPLEVEL_STATE_FULLSCREEN) mode = .fullscreen;
+        }
+    }
+    window.xdg_maximized = mode == .maximized;
+    internal.sendEvent(window.event_fn_data, .{ .mode = mode });
+
+    // width/height of 0 means "you choose"; keep the requested size then.
+    const w: c_int = if (width > 0) width else window.size.width;
+    const hh: c_int = if (height > 0) height else window.size.height;
+    window.resize(.{ .width = std.math.lossyCast(u16, w), .height = std.math.lossyCast(u16, hh) }, null);
+}
+
+fn xdgToplevelClose(data: ?*anyopaque, _: ?*h.xdg_toplevel) callconv(.c) void {
+    const window: *Window = @ptrCast(@alignCast(data));
+    internal.sendEvent(window.event_fn_data, .close);
+}
+
+fn xdgToplevelConfigureBounds(_: ?*anyopaque, _: ?*h.xdg_toplevel, _: c_int, _: c_int) callconv(.c) void {}
+
+fn xdgToplevelWmCapabilities(_: ?*anyopaque, _: ?*h.xdg_toplevel, _: [*c]h.wl_array) callconv(.c) void {}
+
+const xdg_decoration_listener: h.zxdg_toplevel_decoration_v1_listener = .{
+    .configure = xdgDecorationConfigure,
+};
+
+/// The compositor confirms the requested decoration mode; nothing to do beyond
+/// accepting it (we always ask for SERVER_SIDE on this path).
+fn xdgDecorationConfigure(_: ?*anyopaque, _: ?*h.zxdg_toplevel_decoration_v1, _: h.zxdg_toplevel_decoration_v1_mode) callconv(.c) void {}
 
 fn frameConfigure(frame: ?*h.libdecor_frame, configuration: ?*h.libdecor_configuration, data: ?*anyopaque) callconv(.c) void {
     const self: *Window = @ptrCast(@alignCast(data));

@@ -139,6 +139,22 @@ pub const CreateWindowOptions = struct {
     /// Only functional on Windows and X11.
     parent: usize = 0,
 
+    /// Request a surface whose alpha channel is composited by the window system
+    /// (client-side rounded corners / shadows). No-op on backends that cannot.
+    transparent: bool = false,
+
+    /// When false, the application draws its own window chrome (client-side
+    /// decorations) and the backend must not add system decorations. On Wayland
+    /// this also keeps libdecor's decoration plugin (and its GTK/cairo stack)
+    /// unloaded, because the frame is borderless by design. `transparent`
+    /// implies the same thing.
+    ///
+    /// When true and the compositor advertises `zxdg_decoration_manager_v1`,
+    /// Wayland uses a pure xdg-shell path with SERVER_SIDE decorations and skips
+    /// libdecor (and its frame) entirely. Pair with `transparent = false`: the
+    /// compositor's decorations need an opaque surface.
+    decorations: bool = true,
+
     gl_options: ?GlOptions = null,
 };
 
@@ -197,6 +213,40 @@ pub const Window = struct {
 
     pub fn setMode(self: *Window, mode: WindowMode) void {
         self.backend.setMode(mode);
+    }
+
+    /// Hide or show the window's decorations. When `false`, the window is
+    /// borderless and the application is responsible for drawing its own
+    /// title bar and window controls.
+    pub fn setDecorations(self: *Window, decorations: bool) void {
+        self.backend.setDecorations(decorations);
+    }
+
+    /// Begin an interactive move (drag) of the window. Uses the most recent
+    /// pointer or keyboard input serial; call in response to a press on the
+    /// application-drawn title bar.
+    pub fn beginMove(self: *Window) void {
+        self.backend.beginMove();
+    }
+
+    /// Begin an interactive resize of the window from `edge`. Uses the most
+    /// recent pointer input serial.
+    pub fn beginResize(self: *Window, edge: ResizeEdge) void {
+        self.backend.beginResize(edge);
+    }
+
+    pub fn minimize(self: *Window) void {
+        self.backend.minimize();
+    }
+
+    /// Toggle between maximized and normal.
+    pub fn toggleMaximize(self: *Window) void {
+        self.backend.toggleMaximize();
+    }
+
+    /// Ask the windowing system to close the window (delivers a `.close` event).
+    pub fn closeWindow(self: *Window) void {
+        self.backend.closeWindow();
     }
 
     pub fn setPosition(self: *Window, position: Position) void {
@@ -599,6 +649,12 @@ pub const Event = union(enum) {
 
     /// Only sent when `Window.enableTextInput` has been called.
     char: u21,
+    /// The character the pressed key produces under the active keyboard layout,
+    /// resolved *without* regard to Ctrl/Alt. Unlike `.char`, this is sent for
+    /// modifier chords too, so shortcut handling can map a physical key to the
+    /// character the user sees (Ctrl+ö on a Swedish layout) instead of its US
+    /// position. Only sent when the key maps to a printable character.
+    key_text: u21,
     preview_reset: void,
     preview_char: u21,
     /// If the values are equal an I-beam should be displayed at that position,
@@ -651,6 +707,19 @@ pub const WindowMode = enum {
     normal,
     maximized,
     fullscreen,
+};
+
+/// Edge/corner from which an interactive resize is initiated.
+pub const ResizeEdge = enum {
+    none,
+    top,
+    bottom,
+    left,
+    top_left,
+    bottom_left,
+    right,
+    top_right,
+    bottom_right,
 };
 
 pub const Modifiers = struct {

@@ -22,6 +22,12 @@ extern fn wioEnableRelativeMouse(*NSWindow) void;
 extern fn wioDisableRelativeMouse(*NSWindow) void;
 extern fn wioSetTitle(*NSWindow, [*]const u8, usize) void;
 extern fn wioSetMode(*NSWindow, u8) void;
+extern fn wioSetDecorations(*NSWindow, bool) void;
+extern fn wioWindowMove(*NSWindow) void;
+extern fn wioWindowResize(*NSWindow, u8) void;
+extern fn wioMinimize(*NSWindow) void;
+extern fn wioToggleMaximize(*NSWindow) void;
+extern fn wioCloseWindow(*NSWindow) void;
 extern fn wioSetPosition(*NSWindow, i16, i16) void;
 extern fn wioSetSize(*NSWindow, u16, u16) void;
 extern fn wioSetCursor(*NSWindow, u8) void;
@@ -284,6 +290,30 @@ pub const Window = struct {
 
     pub fn setTitle(self: *Window, title: []const u8) void {
         wioSetTitle(self.window, title.ptr, title.len);
+    }
+
+    pub fn setDecorations(self: *Window, decorations: bool) void {
+        wioSetDecorations(self.window, decorations);
+    }
+
+    pub fn beginMove(self: *Window) void {
+        wioWindowMove(self.window);
+    }
+
+    pub fn beginResize(self: *Window, edge: wio.ResizeEdge) void {
+        wioWindowResize(self.window, @intFromEnum(edge));
+    }
+
+    pub fn minimize(self: *Window) void {
+        wioMinimize(self.window);
+    }
+
+    pub fn toggleMaximize(self: *Window) void {
+        wioToggleMaximize(self.window);
+    }
+
+    pub fn closeWindow(self: *Window) void {
+        wioCloseWindow(self.window);
     }
 
     pub fn setMode(self: *Window, mode: wio.WindowMode) void {
