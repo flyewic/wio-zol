@@ -710,6 +710,33 @@ pub const Window = struct {
         self.clipboard_text_fn_data = clipboard_text_fn_data;
         _ = c.XConvertSelection(globals.display, atoms.CLIPBOARD, atoms.UTF8_STRING, atoms.SELECTION, self.window, h.CurrentTime);
         _ = c.XFlush(globals.display);
+
+        // X11 selection transfer is asynchronous (SelectionNotify, plus
+        // PropertyNotify chunks for INCR). Callers that want the text now —
+        // e.g. a synchronous paste — need us to pump the connection until the
+        // callback has run. Only selection-related events are dispatched;
+        // everything else stays queued for the normal event loop.
+        var event: h.XEvent = undefined;
+        while (c.XCheckTypedWindowEvent(globals.display, self.window, h.SelectionNotify, &event) == h.False) {
+            if (c.XCheckTypedWindowEvent(globals.display, self.window, h.SelectionRequest, &event) == h.True) handle(&event);
+        }
+
+        if (event.xselection.property == h.None) {
+            // No owner / empty selection; the callback is not invoked.
+            self.clipboardTextFn = null;
+            self.clipboard_text_fn_data = null;
+            return;
+        }
+
+        handle(&event); // reads the property, invokes clipboardTextFn, or arms INCR
+
+        while (self.clipboard_incr and self.clipboardTextFn != null) {
+            if (c.XCheckTypedWindowEvent(globals.display, self.window, h.PropertyNotify, &event) == h.True) {
+                handle(&event);
+            } else if (c.XCheckTypedWindowEvent(globals.display, self.window, h.SelectionRequest, &event) == h.True) {
+                handle(&event);
+            }
+        }
     }
 
     pub fn getDropData(self: *Window, allocator: std.mem.Allocator) wio.DropData {
