@@ -103,6 +103,7 @@ static void warpCursor(NSWindow *window) {
 
 - (void)windowDidResignKey:(NSNotification *)notification {
     wioUnfocused(zig);
+    wioModifiers(zig, 0);
 }
 
 - (void)windowDidChangeOcclusionState:(NSNotification *)notification {

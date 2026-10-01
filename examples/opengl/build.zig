@@ -7,27 +7,27 @@ pub fn build(b: *std.Build) void {
     const wio = b.dependency("wio", .{
         .target = target,
         .optimize = optimize,
+        .enable_opengl = true,
+    });
+
+    const opengl = b.dependency("opengl", .{
+        .major_version = 4,
+        .minor_version = 1,
+        .profile = .core,
     });
 
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .imports = &.{
             .{ .name = "wio", .module = wio.module("wio") },
+            .{ .name = "gl", .module = opengl.module("opengl") },
         },
         .target = target,
         .optimize = optimize,
     });
-    exe_mod.addCSourceFile(.{ .file = b.path("src/metal.m") });
-
-    if (b.sysroot) |sysroot| {
-        exe_mod.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "System/Library/Frameworks" }) });
-        exe_mod.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sysroot, "usr/include" }) });
-    }
-    exe_mod.linkFramework("Metal", .{});
-    exe_mod.linkFramework("QuartzCore", .{});
 
     const exe = b.addExecutable(.{
-        .name = "metal",
+        .name = "opengl",
         .root_module = exe_mod,
     });
     b.installArtifact(exe);

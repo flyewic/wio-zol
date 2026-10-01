@@ -86,10 +86,6 @@ pub const Window = struct {
         _ = edge;
     }
 
-    pub fn minimize(self: *Window) void {
-        _ = self;
-    }
-
     pub fn toggleMaximize(self: *Window) void {
         _ = self;
     }
@@ -121,6 +117,10 @@ pub const Window = struct {
     pub fn setCursor(self: *Window, shape: wio.Cursor) void {
         _ = self;
         _ = shape;
+    }
+
+    pub fn minimize(self: *Window) void {
+        _ = self;
     }
 
     pub fn requestAttention(self: *Window) void {

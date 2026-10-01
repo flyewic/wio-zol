@@ -335,13 +335,6 @@ pub const Window = union {
         }
     }
 
-    pub fn minimize(self: *Window) void {
-        switch (active) {
-            .x11 => self.x11.minimize(),
-            .wayland => self.wayland.minimize(),
-        }
-    }
-
     pub fn toggleMaximize(self: *Window) void {
         switch (active) {
             .x11 => self.x11.toggleMaximize(),
@@ -381,6 +374,13 @@ pub const Window = union {
         switch (active) {
             .x11 => self.x11.setCursor(shape),
             .wayland => self.wayland.setCursor(shape),
+        }
+    }
+
+    pub fn minimize(self: *Window) void {
+        switch (active) {
+            .x11 => self.x11.minimize(),
+            .wayland => self.wayland.minimize(),
         }
     }
 

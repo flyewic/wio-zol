@@ -74,7 +74,7 @@ pub fn run(func: fn () anyerror!bool) !void {
 
 /// Alternative to `run()`, providing user control over the main loop.
 ///
-/// Not available for WebAssembly.
+/// **WebAssembly** - Not available.
 pub fn update() void {
     backend.update();
 }
@@ -235,10 +235,6 @@ pub const Window = struct {
         self.backend.beginResize(edge);
     }
 
-    pub fn minimize(self: *Window) void {
-        self.backend.minimize();
-    }
-
     /// Toggle between maximized and normal.
     pub fn toggleMaximize(self: *Window) void {
         self.backend.toggleMaximize();
@@ -264,6 +260,10 @@ pub const Window = struct {
 
     pub fn setCursor(self: *Window, cursor: Cursor) void {
         self.backend.setCursor(cursor);
+    }
+
+    pub fn minimize(self: *Window) void {
+        self.backend.minimize();
     }
 
     pub fn requestAttention(self: *Window) void {
@@ -319,7 +319,7 @@ pub const Window = struct {
         self.backend.glSwapInterval(interval);
     }
 
-    /// Not available for WebAssembly or Haiku.
+    /// **WebAssembly**, **Haiku** - Not available.
     pub fn vkCreateSurface(self: *Window, instance: usize, allocation_callbacks: ?*const anyopaque, surface: *u64) !void {
         assertFeature(.vulkan);
         return switch (self.backend.vkCreateSurface(instance, allocation_callbacks, surface)) {
@@ -367,6 +367,8 @@ pub const Framebuffer = struct {
     }
 
     /// `rgb` is encoded as 0xRRGGBB.
+    ///
+    /// `x` and `y` must be within the framebuffer.
     pub fn setPixel(self: *Framebuffer, x: usize, y: usize, rgb: u32) void {
         self.backend.setPixel(x, y, rgb);
     }
@@ -417,13 +419,13 @@ pub fn glReleaseCurrentContext() void {
     backend.glReleaseCurrentContext();
 }
 
-/// Not available for WebAssembly or Haiku.
+/// **WebAssembly**, **Haiku** - Not available.
 pub fn vkGetInstanceProcAddr(instance: usize, name: [*:0]const u8) ?*const fn () void {
     assertFeature(.vulkan);
     return backend.vkGetInstanceProcAddr(instance, name);
 }
 
-/// Not available for WebAssembly or Haiku.
+/// **WebAssembly**, **Haiku** - Not available.
 pub fn getRequiredVulkanInstanceExtensions() []const [*:0]const u8 {
     return backend.getRequiredVulkanInstanceExtensions();
 }
@@ -627,7 +629,9 @@ pub const Event = union(enum) {
     close: void,
     focused: void,
     unfocused: void,
+    /// **Android** - Indicates that rendering is allowed.
     visible: void,
+    /// **Android** - Indicates that rendering is not allowed.
     hidden: void,
     draw: void,
 
@@ -655,10 +659,21 @@ pub const Event = union(enum) {
     /// character the user sees (Ctrl+ö on a Swedish layout) instead of its US
     /// position. Only sent when the key maps to a printable character.
     key_text: u21,
+    /// Discard the composition string.
+    ///
+    /// Only sent when `Window.enableTextInput` has been called.
     preview_reset: void,
+    /// Append a character to the composition string.
+    ///
+    /// Only sent when `Window.enableTextInput` has been called.
     preview_char: u21,
-    /// If the values are equal an I-beam should be displayed at that position,
-    /// otherwise characters within the range should be highlighted.
+    /// If the values are equal an I-beam should be displayed at that point in
+    /// the composition string, otherwise characters within the range should
+    /// be underlined.
+    ///
+    /// The values are codepoint indices into the composition string.
+    ///
+    /// Only sent when `Window.enableTextInput` has been called.
     preview_cursor: [2]u16,
 
     button_press: Button,

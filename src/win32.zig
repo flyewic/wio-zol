@@ -492,10 +492,6 @@ pub const Window = struct {
         _ = w.SendMessageW(self.window, w.WM_NCLBUTTONDOWN, hit, 0);
     }
 
-    pub fn minimize(self: *Window) void {
-        _ = w.ShowWindow(self.window, w.SW_MINIMIZE);
-    }
-
     pub fn toggleMaximize(self: *Window) void {
         _ = w.ShowWindow(self.window, if (w.IsZoomed(self.window) != 0) w.SW_RESTORE else w.SW_MAXIMIZE);
     }
@@ -565,6 +561,10 @@ pub const Window = struct {
         var pos: w.POINT = undefined;
         _ = w.GetCursorPos(&pos);
         _ = w.SetCursorPos(pos.x, pos.y);
+    }
+
+    pub fn minimize(self: *Window) void {
+        _ = w.ShowWindow(self.window, w.SW_MINIMIZE);
     }
 
     pub fn requestAttention(self: *Window) void {
@@ -1685,6 +1685,7 @@ fn windowProc(window: w.HWND, msg: u32, wParam: w.WPARAM, lParam: w.LPARAM) call
         },
         w.WM_KILLFOCUS => {
             internal.sendEvent(self.event_fn_data, .unfocused);
+            internal.sendEvent(self.event_fn_data, .{ .modifiers = .{} });
             return 0;
         },
         w.WM_PAINT => {

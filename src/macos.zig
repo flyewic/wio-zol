@@ -202,6 +202,8 @@ pub const Window = struct {
 
     pub fn create(options: wio.CreateWindowOptions) !*Window {
         const self = try internal.allocator.create(Window);
+        errdefer internal.allocator.destroy(self);
+
         self.* = .{
             .event_fn_data = options.event_fn_data,
             .window = undefined,
@@ -304,10 +306,6 @@ pub const Window = struct {
         wioWindowResize(self.window, @intFromEnum(edge));
     }
 
-    pub fn minimize(self: *Window) void {
-        wioMinimize(self.window);
-    }
-
     pub fn toggleMaximize(self: *Window) void {
         wioToggleMaximize(self.window);
     }
@@ -335,6 +333,10 @@ pub const Window = struct {
 
     pub fn setCursor(self: *Window, shape: wio.Cursor) void {
         wioSetCursor(self.window, @intFromEnum(shape));
+    }
+
+    pub fn minimize(self: *Window) void {
+        wioMinimize(self.window);
     }
 
     pub fn requestAttention(_: *Window) void {
